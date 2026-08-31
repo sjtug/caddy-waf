@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.4.1-sjtug.1] - 2026-09-01
+
+### Added
+- The SJTUG fork registers `http.handlers.bandwidth_quota`, an independent streaming response-byte quota with multiple rolling windows, configurable IPv4/IPv6 prefix grouping, bbolt persistence, CIDR exemptions, `429`/`Retry-After` enforcement, and Prometheus counters.
+- Added `docs/bandwidthquota.md` and tests for rolling-window expiry, persistence, fail-open state handling, response accounting, exemptions, and Caddyfile parsing.
+
 ## [v0.4.1] - 2026-08-21
 
 ### Fixed

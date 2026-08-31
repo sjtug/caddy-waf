@@ -28,8 +28,9 @@ import (
 // CADDY_MODULE_REGISTRATION.md and
 // https://caddy.community/t/unable-to-register-module-in-the-portal/33572
 //
-// Semantically new(Middleware) and &Middleware{} are identical, so satisfying
-// the scanner costs nothing.
+// Semantically new(T) and &T{} are identical, so satisfying the scanner costs
+// nothing. Keep the expected module names explicit so adding or removing a
+// registered module is reviewed deliberately.
 func TestRegisterModuleArgumentIsScannable(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	if err != nil {
@@ -38,6 +39,7 @@ func TestRegisterModuleArgumentIsScannable(t *testing.T) {
 
 	fset := token.NewFileSet()
 	found := 0
+	registered := make(map[string]bool)
 
 	for _, file := range files {
 		if strings.HasSuffix(file, "_test.go") {
@@ -76,6 +78,9 @@ func TestRegisterModuleArgumentIsScannable(t *testing.T) {
 			switch arg := call.Args[0].(type) {
 			case *ast.CompositeLit:
 				// Foo{} -- accepted by the scanner.
+				if ident, ok := arg.Type.(*ast.Ident); ok {
+					registered[ident.Name] = true
+				}
 			case *ast.CallExpr:
 				// Only new(Foo) is accepted; any other call is a constructor
 				// the scanner cannot follow.
@@ -83,6 +88,10 @@ func TestRegisterModuleArgumentIsScannable(t *testing.T) {
 				if !ok || ident.Name != "new" {
 					t.Errorf("%s: caddy.RegisterModule argument must be a composite literal or new(); "+
 						"a constructor call is not scannable by Caddy's package registry", pos)
+				} else if len(arg.Args) != 1 {
+					t.Errorf("%s: new() takes exactly one module type", pos)
+				} else if module, ok := arg.Args[0].(*ast.Ident); ok {
+					registered[module.Name] = true
 				}
 			case *ast.UnaryExpr:
 				t.Errorf("%s: caddy.RegisterModule argument is &-prefixed (parses as ast.UnaryExpr). "+
@@ -98,7 +107,13 @@ func TestRegisterModuleArgumentIsScannable(t *testing.T) {
 	if found == 0 {
 		t.Fatal("no caddy.RegisterModule call found in the package; the module would not register at all")
 	}
-	if found != 1 {
-		t.Errorf("expected exactly one caddy.RegisterModule call, found %d", found)
+	expected := []string{"Middleware", "BandwidthQuota"}
+	if found != len(expected) {
+		t.Errorf("expected %d caddy.RegisterModule calls, found %d", len(expected), found)
+	}
+	for _, module := range expected {
+		if !registered[module] {
+			t.Errorf("expected caddy.RegisterModule(new(%s))", module)
+		}
 	}
 }

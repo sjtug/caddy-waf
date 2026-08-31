@@ -94,8 +94,9 @@ A first-time reader is recommended to follow this sequence:
 3. [Configuration](configuration.md) — the request lifecycle, every Caddyfile directive, every JSON-only field, blocking precedence.
 4. [Rules](rules.md) — the JSON rule schema and target identifiers.
 5. [Blacklists](blacklists.md) — file formats for IP and DNS blacklists.
-6. [Rate limiting](ratelimit.md) — sliding-window limiter, path matching.
-7. [Country and ASN blocking](geoblocking.md) — GeoIP / ASN behaviour.
+6. [Rate limiting](ratelimit.md) — sliding-window request limiter, path matching.
+7. [Download bandwidth quotas](bandwidthquota.md) — the SJTUG fork's persistent rolling response-byte quotas.
+8. [Country and ASN blocking](geoblocking.md) — GeoIP / ASN behaviour.
 
 ## Every page
 
@@ -109,6 +110,7 @@ A first-time reader is recommended to follow this sequence:
 | [rules.md](rules.md) | `rules.json` schema, target identifiers, regex semantics. |
 | [blacklists.md](blacklists.md) | IP and DNS blacklist file formats. |
 | [ratelimit.md](ratelimit.md) | The `rate_limit` block and behaviour. |
+| [bandwidthquota.md](bandwidthquota.md) | The SJTUG fork's `bandwidth_quota` handler, persistence, exemptions, and metrics. |
 | [geoblocking.md](geoblocking.md) | `block_countries`, `whitelist_countries`, `block_asns`, fallback. |
 | [dynamicupdates.md](dynamicupdates.md) | File watchers, what each reload covers and what it does not. |
 | [metrics.md](metrics.md) | The `/waf_metrics` JSON document. |

@@ -6,7 +6,7 @@ A Web Application Firewall middleware for the [Caddy](https://caddyserver.com/) 
 [![CodeQL](https://github.com/fabriziosalmi/caddy-waf/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/fabriziosalmi/caddy-waf/actions/workflows/github-code-scanning/codeql)
 [![Build, Run and Validate](https://github.com/fabriziosalmi/caddy-waf/actions/workflows/build-run-validate.yml/badge.svg)](https://github.com/fabriziosalmi/caddy-waf/actions/workflows/build-run-validate.yml)
 
-- **Module ID**: `http.handlers.waf` — [registered in Caddy's package registry](https://caddyserver.com/docs/modules/http.handlers.waf), so the module is selectable on the [download page](https://caddyserver.com/download?package=github.com%2Ffabriziosalmi%2Fcaddy-waf)
+- **Module IDs**: `http.handlers.waf` and `http.handlers.bandwidth_quota`
 - **Go module path**: `github.com/fabriziosalmi/caddy-waf`
 - **Current version**: `v0.4.1` (see [`caddywaf.go`](caddywaf.go) — `const wafVersion`)
 - **License**: AGPL-3.0 — note this is a copyleft licence; check it suits your deployment before integrating
@@ -17,7 +17,7 @@ A Web Application Firewall middleware for the [Caddy](https://caddyserver.com/) 
 
 `caddy-waf` is an HTTP handler middleware that inspects requests and responses across four well-defined phases, applies a regular-expression rule set with anomaly scoring, enforces IP/DNS/ASN/country blacklists and whitelists, performs token-bucket-style rate limiting, and exposes a JSON metrics endpoint.
 
-The middleware is implemented as a single Caddy module registered under the ID `http.handlers.waf`. It can be configured through the Caddyfile or directly via JSON.
+The WAF is registered under `http.handlers.waf`. Also the independent `http.handlers.bandwidth_quota` module is registered for persistent rolling response-byte quotas. Both can be configured through the Caddyfile or directly via JSON.
 
 ## Capabilities
 
@@ -33,6 +33,7 @@ The middleware is implemented as a single Caddy module registered under the ID `
 | ASN block | MaxMind GeoLite2 ASN MMDB. |
 | Tor exit-node block | Periodic fetch from `https://check.torproject.org/torbulkexitlist`. |
 | Rate limiting | Per-IP, sliding-window, optional per-path matching with regex patterns. |
+| Download bandwidth quotas | Persistent, multi-window successful-response byte quotas grouped by configurable IPv4/IPv6 prefixes. |
 | Custom block responses | Per-status-code response with custom Content-Type, headers, and body (inline or from file). |
 | Sensitive data redaction | Optional redaction of sensitive query parameters and log fields. |
 | Hot reload | `fsnotify` watchers on rule files, IP blacklist, and DNS blacklist. |

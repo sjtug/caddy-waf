@@ -3,7 +3,7 @@
 | Property | Value |
 |---|---|
 | Module name | `caddy-waf` |
-| Module ID | `http.handlers.waf` |
+| Module IDs | `http.handlers.waf`, `http.handlers.bandwidth_quota` |
 | Module type | HTTP handler middleware |
 | Go module path | `github.com/fabriziosalmi/caddy-waf` |
 | License | AGPL-3.0 |
@@ -13,7 +13,7 @@
 
 ## Description
 
-A Web Application Firewall middleware for the Caddy web server. The middleware inspects HTTP requests and responses across four well-defined phases (request headers, request body, response headers, response body), applies a regular-expression rule set with anomaly scoring, and enforces IP / DNS / ASN / country blacklists and whitelists, Tor exit-node blocking, and per-IP rate limiting. It exposes a JSON metrics endpoint for monitoring.
+A Web Application Firewall middleware for the Caddy web server. The middleware inspects HTTP requests and responses across four well-defined phases (request headers, request body, response headers, response body), applies a regular-expression rule set with anomaly scoring, and enforces IP / DNS / ASN / country blacklists and whitelists, Tor exit-node blocking, and per-IP rate limiting. It exposes a JSON metrics endpoint for monitoring. Also provide an independent persistent rolling download-byte quota handler.
 
 ## Implemented interfaces
 
@@ -25,12 +25,16 @@ A Web Application Firewall middleware for the Caddy web server. The middleware i
 | `caddyhttp.MiddlewareHandler` | `ServeHTTP(w, r, next)` |
 | `caddyfile.Unmarshaler` | `UnmarshalCaddyfile(d)` |
 
+Both `Middleware` and `BandwidthQuota` implement these interfaces.
+
 Module registration:
 
 ```go
 func init() {
-    caddy.RegisterModule(&Middleware{})
+    caddy.RegisterModule(new(Middleware))
+    caddy.RegisterModule(new(BandwidthQuota))
     httpcaddyfile.RegisterHandlerDirective("waf", parseCaddyfile)
+    httpcaddyfile.RegisterHandlerDirective("bandwidth_quota", parseBandwidthQuotaCaddyfile)
 }
 ```
 
@@ -40,7 +44,7 @@ func init() {
 xcaddy build --with github.com/fabriziosalmi/caddy-waf
 ```
 
-See [`docs/installation.md`](docs/installation.md) for alternatives.
+See [`docs/installation.md`](docs/installation.md) for alternatives and [`docs/bandwidthquota.md`](docs/bandwidthquota.md) for the fork's download-quota interface.
 
 ## Caddyfile directives
 
