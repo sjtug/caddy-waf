@@ -44,7 +44,7 @@ features:
     linkText: Metrics schema
   - title: Hot reload
     icon: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>'
-    details: File watchers on the rule files and both blacklists, with a documented matrix of what each reload covers and what still needs a caddy reload.
+    details: File watchers on rule files, both blacklists, and the IP whitelist, with support for in-place writes and atomic replacements.
     link: /dynamicupdates
     linkText: Reload matrix
 ---
@@ -76,6 +76,7 @@ See [Installation](installation.md) for every supported path.
         waf {
             rule_file          rules.json
             ip_blacklist_file  ip_blacklist.txt
+            ip_whitelist_file  ip_whitelist.txt
             dns_blacklist_file dns_blacklist.txt
             anomaly_threshold  20
             metrics_endpoint   /waf_metrics

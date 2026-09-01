@@ -88,8 +88,9 @@ The full list is the `directiveHandlers` map in [`config.go`](https://github.com
 | `log_buffer` | `<positive int>` | `1000` | Capacity of the asynchronous log channel. When full, logs fall back to synchronous emission. |
 | `rule_file` | `<file>` | none | Path to a JSON rule file. Repeat the directive to load multiple files. At least one `rule_file` is required. |
 | `ip_blacklist_file` | `<file>` | unset | Path to the IP blacklist (single IPs and CIDR ranges). The file is created empty if it does not exist. |
+| `ip_whitelist_file` | `<file>` | unset | Path to a hot-reloadable IP whitelist. Accepts the same entries as `whitelist_ip`, one per line; blank lines and `#` comments are ignored. The file is created empty if it does not exist. |
 | `dns_blacklist_file` | `<file>` | unset | Path to the DNS blacklist (one host per line). The file is created empty if it does not exist. |
-| `whitelist_ip` | `<entry> [<entry> …]` | unset | IPs, CIDR ranges, or the token `private_ranges`, exempt from the **IP-reputation** checks. Repeatable. See [IP whitelist](#ip-whitelist). |
+| `whitelist_ip` | `<entry> [<entry> …]` | unset | Inline IPs, CIDR ranges, or the token `private_ranges`, exempt from the **IP-reputation** checks. Repeatable and combined with `ip_whitelist_file`. See [IP whitelist](#ip-whitelist). |
 | `anomaly_threshold` | `<positive int>` | `5` (Caddyfile) / `20` (Provision fallback) | Score at which a request is blocked. Lower values are stricter. |
 | `max_request_body_size` | `<bytes>` | `10485760` (10 MiB) | Upper bound for request body reads via `io.LimitReader`. `0` means "use the default". |
 | `max_response_body_size` | `<bytes>` | `10485760` (10 MiB) | Upper bound on how much of the response body is held in memory for Phase 4 inspection. `0` means "use the default". See [Response body buffering](#response-body-buffering). |
@@ -196,6 +197,7 @@ A JSON config snippet equivalent to the minimal Caddyfile:
   "handler": "waf",
   "rule_files": ["rules.json"],
   "ip_blacklist_file": "ip_blacklist.txt",
+  "ip_whitelist_file": "ip_whitelist.txt",
   "dns_blacklist_file": "dns_blacklist.txt",
   "metrics_endpoint": "/waf_metrics",
   "anomaly_threshold": 20,
@@ -209,8 +211,9 @@ A JSON config snippet equivalent to the minimal Caddyfile:
 
 ## IP whitelist
 
-`whitelist_ip` exempts an address from the checks that judge a client by *where
-it comes from*, without switching the WAF off for it.
+`whitelist_ip` and `ip_whitelist_file` exempt addresses from the checks that
+judge a client by *where it comes from*, without switching the WAF off for
+them. Inline and file-backed entries are combined.
 
 ```caddyfile
 waf {
@@ -221,8 +224,17 @@ waf {
 
     # Bare IPs and CIDR ranges work too, and the directive is repeatable.
     whitelist_ip 203.0.113.4 198.51.100.0/24
+
+    # One entry per line; changes are hot-reloaded.
+    ip_whitelist_file ip_whitelist.txt
 }
 ```
+
+An `ip_whitelist_file` uses the same entry forms as `whitelist_ip`, including
+`private_ranges`. Leading and trailing whitespace is removed; blank lines and
+lines beginning with `#` are ignored. If the path does not exist while parsing
+a Caddyfile, an empty file is created. JSON configurations must point to an
+existing readable file.
 
 `private_ranges` expands to exactly the set Caddy uses for its own placeholder:
 `192.168.0.0/16`, `172.16.0.0/12`, `10.0.0.0/8`, `127.0.0.1/8`, `fd00::/8`,
@@ -232,7 +244,8 @@ built.
 
 An entry that does not parse fails startup. It is not skipped with a warning:
 silently dropping an entry leaves the operator believing an address is exempt
-when it is not.
+when it is not. A malformed or unreadable hot-reload update is rejected as a
+whole, retaining the last known-good in-memory whitelist.
 
 ### What the exemption covers
 
@@ -339,10 +352,14 @@ Any of these failing aborts startup with a descriptive error.
 
 ## Reload semantics
 
-The middleware installs `fsnotify` watchers on `rule_files` and the IP / DNS blacklist files. On a `WRITE` event:
+The middleware installs `fsnotify` watchers on `rule_file`, `ip_blacklist_file`,
+`dns_blacklist_file`, and `ip_whitelist_file` paths. Watchers observe the parent
+directory, so both in-place writes and atomic replacements trigger a reload.
 
-- If the modified path contains the substring `rule`, [`ReloadRules`](https://github.com/fabriziosalmi/caddy-waf/blob/main/caddywaf.go) re-parses every configured rule file atomically and replaces the in-memory rule map.
-- Otherwise, [`ReloadConfig`](https://github.com/fabriziosalmi/caddy-waf/blob/main/caddywaf.go) reloads the IP blacklist, DNS blacklist, **and** the rule files.
+- Rule-file changes call [`ReloadRules`](https://github.com/fabriziosalmi/caddy-waf/blob/main/caddywaf.go).
+- IP/DNS-blacklist changes call [`ReloadConfig`](https://github.com/fabriziosalmi/caddy-waf/blob/main/caddywaf.go).
+- IP-whitelist changes call `ReloadIPWhitelist`, which combines the new file
+  contents with all inline `whitelist_ip` entries and swaps the trie atomically.
 
 A reload does **not** rebuild the rate limiter, the GeoIP database handles, the Tor schedule, or any other Caddyfile-only setting. To apply such changes, run `caddy reload` so Caddy re-runs `Provision`.
 
@@ -360,6 +377,7 @@ The repository ships a complete Caddyfile in [`Caddyfile`](https://github.com/fa
         waf {
             metrics_endpoint  /waf_metrics
             anomaly_threshold 20
+            ip_whitelist_file ip_whitelist.txt
 
             rule_file rules.json
 

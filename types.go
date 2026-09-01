@@ -1,6 +1,7 @@
 package caddywaf
 
 import (
+	"context"
 	"regexp"
 	"sync"
 	"time"
@@ -121,13 +122,15 @@ type WAFState struct {
 type Middleware struct {
 	mu sync.RWMutex
 
-	RuleFiles       []string `json:"rule_files"`
-	IPBlacklistFile string   `json:"ip_blacklist_file"`
-	// IPWhitelist holds entries exempt from the IP-reputation checks: bare IPs,
-	// CIDR ranges, or the token "private_ranges". See whitelist_ip in
-	// docs/configuration.md.
+	RuleFiles        []string `json:"rule_files"`
+	IPBlacklistFile  string   `json:"ip_blacklist_file"`
+	IPWhitelistFile  string   `json:"ip_whitelist_file,omitempty"`
+	DNSBlacklistFile string   `json:"dns_blacklist_file"`
+	// IPWhitelist holds inline entries exempt from the IP-reputation checks:
+	// bare IPs, CIDR ranges, or the token "private_ranges". Entries loaded from
+	// IPWhitelistFile are combined with these. See whitelist_ip and
+	// ip_whitelist_file in docs/configuration.md.
 	IPWhitelist      []string            `json:"ip_whitelist,omitempty"`
-	DNSBlacklistFile string              `json:"dns_blacklist_file"`
 	AnomalyThreshold int                 `json:"anomaly_threshold"`
 	CountryBlacklist CountryAccessFilter `json:"country_blacklist"`
 	CountryWhitelist CountryAccessFilter `json:"country_whitelist"`
@@ -180,6 +183,9 @@ type Middleware struct {
 
 	logChan chan LogEntry // Buffered channel for log entries
 	logDone chan struct{} // Signal to stop the logging worker
+
+	watcherCancel context.CancelFunc
+	watcherWG     sync.WaitGroup
 
 	ruleCache *RuleCache // New field for RuleCache
 

@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -49,7 +50,7 @@ var (
 )
 
 // Add or update the version constant as needed
-const wafVersion = "v0.4.1" // update this value to the new release version when tagging
+const wafVersion = "v0.4.1-sjtug.2" // update this value to the new release version when tagging
 
 // ==================== Initialization and Setup ====================
 
@@ -171,11 +172,6 @@ func (m *Middleware) Provision(ctx caddy.Context) error {
 	// Log the current version of the middleware
 	m.logVersion()
 
-	// Start file watchers for rule files and blacklist files
-	// Context cancellation could be added in the future to gracefully stop watchers.
-	m.startFileWatcher(m.RuleFiles)
-	m.startFileWatcher([]string{m.IPBlacklistFile, m.DNSBlacklistFile})
-
 	// Configure rate limiting
 	if m.RateLimit.Requests > 0 {
 		if m.RateLimit.Window <= 0 || m.RateLimit.CleanupInterval <= 0 {
@@ -271,28 +267,10 @@ func (m *Middleware) Provision(ctx caddy.Context) error {
 		}
 	}
 
-	// Build the IP whitelist
-	if len(m.IPWhitelist) > 0 {
-		trie, expanded, err := buildIPWhitelist(m.IPWhitelist)
-		if err != nil {
-			return err
-		}
-		m.ipWhitelist = trie
-		m.logger.Info("IP whitelist loaded",
-			zap.Int("entries", len(expanded)),
-			zap.Strings("ranges", expanded),
-		)
-
-		// Warn loudly when private ranges are exempt. The whitelist matches on
-		// the peer address, which is correct when caddy-waf is the edge but
-		// means the peer is the *proxy* when it is not -- and a proxy on
-		// localhost or a private network would exempt every request passing
-		// through it, silently turning these controls off.
-		for _, entry := range m.IPWhitelist {
-			if strings.EqualFold(strings.TrimSpace(entry), PrivateRangesToken) {
-				m.logger.Warn("whitelist_ip includes private_ranges: requests whose PEER address is private are exempt from the IP blacklist, country filter and ASN filter. This is only what you want if caddy-waf is the edge. Behind another proxy the peer is that proxy, which would exempt all traffic.")
-				break
-			}
+	// Build the IP whitelist from both inline entries and the optional file.
+	if len(m.IPWhitelist) > 0 || m.IPWhitelistFile != "" {
+		if err := m.loadIPWhitelist(); err != nil {
+			return fmt.Errorf("failed to load IP whitelist: %w", err)
 		}
 	}
 
@@ -314,6 +292,14 @@ func (m *Middleware) Provision(ctx caddy.Context) error {
 		m.logger.Warn("No rule files specified, WAF will run without rules.") // Log a warning instead of error
 	}
 
+	// Watch directories rather than file descriptors so atomic replacements
+	// (write temp file, then rename) continue to be observed.
+	watcherCtx, cancelWatchers := context.WithCancel(context.Background())
+	m.watcherCancel = cancelWatchers
+	m.startFileWatcher(watcherCtx, m.RuleFiles, "WAF rules", m.ReloadRules)
+	m.startFileWatcher(watcherCtx, []string{m.IPBlacklistFile, m.DNSBlacklistFile}, "WAF configuration", m.ReloadConfig)
+	m.startFileWatcher(watcherCtx, []string{m.IPWhitelistFile}, "IP whitelist", m.ReloadIPWhitelist)
+
 	m.logger.Info("WAF middleware provisioned successfully")
 	return nil
 }
@@ -321,6 +307,12 @@ func (m *Middleware) Provision(ctx caddy.Context) error {
 func (m *Middleware) Shutdown(ctx context.Context) error {
 	m.logger.Info("Starting WAF middleware shutdown procedures")
 	m.isShuttingDown = true
+
+	if m.watcherCancel != nil {
+		m.watcherCancel()
+		m.watcherWG.Wait()
+		m.watcherCancel = nil
+	}
 
 	// Stop the rate limiter cleanup
 	if m.rateLimiter != nil {
@@ -414,56 +406,64 @@ func (m *Middleware) logVersion() {
 	m.logger.Info("WAF middleware version", zap.String("version", wafVersion))
 }
 
-func (m *Middleware) startFileWatcher(filePaths []string) {
+func (m *Middleware) startFileWatcher(ctx context.Context, filePaths []string, description string, reload func() error) {
 	for _, path := range filePaths {
-		// Skip watching if the file doesn't exist
-		if _, err := os.Stat(path); os.IsNotExist(err) {
-			m.logger.Warn("Skipping file watch, file does not exist",
-				zap.String("file", path),
-			)
+		if path == "" {
 			continue
 		}
 
-		// Note: In future, a context may be used here for cancellation.
-		go func(file string) {
-			watcher, err := fsnotify.NewWatcher()
-			if err != nil {
-				m.logger.Error("Failed to start file watcher", zap.Error(err))
-				return
-			}
-			defer watcher.Close()
+		absolutePath, err := filepath.Abs(path)
+		if err != nil {
+			m.logger.Error("Failed to resolve watched file", zap.String("file", path), zap.Error(err))
+			continue
+		}
+		if _, err := os.Stat(absolutePath); err != nil {
+			m.logger.Error("Skipping file watch; file is not accessible", zap.String("file", absolutePath), zap.Error(err))
+			continue
+		}
 
-			err = watcher.Add(file)
-			if err != nil {
-				m.logger.Error("Failed to watch file", zap.String("file", file), zap.Error(err))
-				return
-			}
+		watcher, err := fsnotify.NewWatcher()
+		if err != nil {
+			m.logger.Error("Failed to start file watcher", zap.String("file", absolutePath), zap.Error(err))
+			continue
+		}
+		if err := watcher.Add(filepath.Dir(absolutePath)); err != nil {
+			m.logger.Error("Failed to watch file directory", zap.String("file", absolutePath), zap.Error(err))
+			watcher.Close()
+			continue
+		}
+
+		m.watcherWG.Add(1)
+		go func(file string, watcher *fsnotify.Watcher) {
+			defer m.watcherWG.Done()
+			defer watcher.Close()
 
 			for {
 				select {
-				case event := <-watcher.Events:
-					if event.Op&fsnotify.Write == fsnotify.Write {
-						m.logger.Info("Detected configuration change. Reloading...", zap.String("file", file))
-						if strings.Contains(file, "rule") {
-							if err := m.ReloadRules(); err != nil {
-								m.logger.Error("Failed to reload rules after change", zap.String("file", file), zap.Error(err))
-							} else {
-								m.logger.Info("Rules reloaded successfully", zap.String("file", file))
-							}
-						} else {
-							err := m.ReloadConfig()
-							if err != nil {
-								m.logger.Error("Failed to reload config after change", zap.Error(err))
-							} else {
-								m.logger.Info("Configuration reloaded successfully")
-							}
-						}
+				case <-ctx.Done():
+					return
+				case event, ok := <-watcher.Events:
+					if !ok {
+						return
 					}
-				case err := <-watcher.Errors:
-					m.logger.Error("File watcher error", zap.Error(err))
+					if filepath.Clean(event.Name) != file || event.Op&(fsnotify.Write|fsnotify.Create) == 0 {
+						continue
+					}
+
+					m.logger.Info("Detected file change; reloading", zap.String("type", description), zap.String("file", file))
+					if err := reload(); err != nil {
+						m.logger.Error("Failed to reload after file change", zap.String("type", description), zap.String("file", file), zap.Error(err))
+					} else {
+						m.logger.Info("Reloaded after file change", zap.String("type", description), zap.String("file", file))
+					}
+				case err, ok := <-watcher.Errors:
+					if !ok {
+						return
+					}
+					m.logger.Error("File watcher error", zap.String("file", file), zap.Error(err))
 				}
 			}
-		}(path)
+		}(absolutePath, watcher)
 	}
 }
 

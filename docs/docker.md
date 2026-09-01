@@ -115,7 +115,7 @@ docker compose logs -f caddy-waf
 
 ## Hot reload inside a container
 
-`fsnotify` works inside containers as long as the watched files are on a normal mount (bind mount, named volume, or `tmpfs`). Edit the mounted `rules.json` from the host and the watcher inside the container will see the `WRITE` event and reload — see [dynamicupdates.md](dynamicupdates.md) for the reload matrix.
+`fsnotify` works inside containers as long as the watched files are on a normal mount (bind mount, named volume, or `tmpfs`). Edit or atomically replace mounted rule, blacklist, or IP-whitelist files from the host and the watcher inside the container will reload them — see [dynamicupdates.md](dynamicupdates.md) for the reload matrix.
 
 For settings that require a full `Provision` cycle (rate limiter, GeoIP, Tor, custom responses, log paths) you must reload Caddy itself:
 

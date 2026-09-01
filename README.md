@@ -8,7 +8,7 @@ A Web Application Firewall middleware for the [Caddy](https://caddyserver.com/) 
 
 - **Module IDs**: `http.handlers.waf` and `http.handlers.bandwidth_quota`
 - **Go module path**: `github.com/fabriziosalmi/caddy-waf`
-- **Current version**: `v0.4.1` (see [`caddywaf.go`](caddywaf.go) — `const wafVersion`)
+- **Current version**: `v0.4.1-sjtug.2` (see [`caddywaf.go`](caddywaf.go) — `const wafVersion`)
 - **License**: AGPL-3.0 — note this is a copyleft licence; check it suits your deployment before integrating
 
 ---
@@ -36,7 +36,7 @@ The WAF is registered under `http.handlers.waf`. Also the independent `http.hand
 | Download bandwidth quotas | Persistent, multi-window successful-response byte quotas grouped by configurable IPv4/IPv6 prefixes. |
 | Custom block responses | Per-status-code response with custom Content-Type, headers, and body (inline or from file). |
 | Sensitive data redaction | Optional redaction of sensitive query parameters and log fields. |
-| Hot reload | `fsnotify` watchers on rule files, IP blacklist, and DNS blacklist. |
+| Hot reload | `fsnotify` watchers on rule files, IP/DNS blacklists, and the file-backed IP whitelist. In-place writes and atomic replacements are supported. |
 | Metrics endpoint | JSON document exposed at the configured `metrics_endpoint` path. |
 | Asynchronous logging | Buffered log channel with synchronous fallback when the buffer is full. |
 
@@ -171,6 +171,7 @@ Tags are `0.4.1`, `0.4` and `latest` — note there is **no `v` prefix**, unlike
             metrics_endpoint   /waf_metrics
             rule_file          rules.json
             ip_blacklist_file  ip_blacklist.txt
+            ip_whitelist_file  ip_whitelist.txt
             dns_blacklist_file dns_blacklist.txt
         }
 

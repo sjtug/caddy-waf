@@ -158,6 +158,7 @@ func (cl *ConfigLoader) UnmarshalCaddyfile(d *caddyfile.Dispenser, m *Middleware
 		"log_json":               cl.parseLogJSON,
 		"rule_file":              cl.parseRuleFile,
 		"ip_blacklist_file":      cl.parseBlacklistFileDirective(true), // Use directive-specific helper
+		"ip_whitelist_file":      cl.parseIPWhitelistFile,
 		"whitelist_ip":           cl.parseWhitelistIP,
 		"dns_blacklist_file":     cl.parseBlacklistFileDirective(false), // Use directive-specific helper
 		"anomaly_threshold":      cl.parseAnomalyThreshold,
@@ -385,6 +386,23 @@ func (cl *ConfigLoader) parseBlacklistFileDirective(isIP bool) func(d *caddyfile
 	}
 }
 
+// parseIPWhitelistFile parses the path to a hot-reloadable IP whitelist.
+func (cl *ConfigLoader) parseIPWhitelistFile(d *caddyfile.Dispenser, m *Middleware) error {
+	if !d.NextArg() {
+		return d.ArgErr()
+	}
+	filePath := d.Val()
+	if d.NextArg() {
+		return d.ArgErr()
+	}
+	if err := cl.ensureIPWhitelistFileExists(d, filePath); err != nil {
+		return err
+	}
+	m.IPWhitelistFile = filePath
+	cl.logger.Info("IP whitelist file configured", zap.String("path", filePath))
+	return nil
+}
+
 func (cl *ConfigLoader) parseAnomalyThreshold(d *caddyfile.Dispenser, m *Middleware) error {
 	threshold, err := cl.parsePositiveInteger(d, "anomaly_threshold")
 	if err != nil {
@@ -595,6 +613,24 @@ func (cl *ConfigLoader) parseInlineResponseBody(d *caddyfile.Dispenser) (string,
 		return "", d.Err("missing custom response body")
 	}
 	return strings.Join(remaining, " "), nil
+}
+
+// ensureIPWhitelistFileExists checks if the whitelist file exists and creates
+// an empty one if not, matching the existing blacklist-file directives.
+func (cl *ConfigLoader) ensureIPWhitelistFileExists(d *caddyfile.Dispenser, filePath string) error {
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		file, createErr := os.Create(filePath)
+		if createErr != nil {
+			return d.Errf("could not create IP whitelist file '%s': %v", filePath, createErr)
+		}
+		if closeErr := file.Close(); closeErr != nil {
+			return d.Errf("could not close newly created IP whitelist file '%s': %v", filePath, closeErr)
+		}
+		cl.logger.Warn("IP whitelist file does not exist; created an empty file", zap.String("path", filePath))
+	} else if err != nil {
+		return d.Errf("could not access IP whitelist file '%s': %v", filePath, err)
+	}
+	return nil
 }
 
 // ensureBlacklistFileExists checks if blacklist file exists and creates it if not.

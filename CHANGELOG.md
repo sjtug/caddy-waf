@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.4.1-sjtug.2] - 2026-09-01
+
+### Added
+- Added `ip_whitelist_file` for loading IP-reputation exemptions from a plain-text file. File entries are combined with repeatable inline `whitelist_ip` entries and hot-reloaded atomically; malformed updates retain the last known-good whitelist. This resolves [#151](https://github.com/fabriziosalmi/caddy-waf/issues/151).
+- File watchers now follow atomic file replacement and stop during module shutdown.
+
+### Changed
+- Bumped version constant `wafVersion` to `v0.4.1-sjtug.2`.
+
 ## [v0.4.1-sjtug.1] - 2026-09-01
 
 ### Added

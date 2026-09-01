@@ -1,6 +1,6 @@
 # Blacklists
 
-The middleware loads two blacklists at startup and on demand: an IP blacklist and a DNS blacklist. Both are plain-text files. Their loaders live in [`blacklist.go`](https://github.com/fabriziosalmi/caddy-waf/blob/main/blacklist.go) (`LoadIPBlacklistFromFile`, `LoadDNSBlacklistFromFile`).
+The middleware loads IP and DNS blacklists plus an optional IP whitelist at startup and on demand. All are plain-text files. Blacklist loaders live in [`blacklist.go`](https://github.com/fabriziosalmi/caddy-waf/blob/main/blacklist.go); the whitelist loader lives in [`ipwhitelist.go`](https://github.com/fabriziosalmi/caddy-waf/blob/main/ipwhitelist.go).
 
 ## Common file syntax
 
@@ -48,9 +48,32 @@ The middleware loads two blacklists at startup and on demand: an IP blacklist an
 
 ### Hot reload
 
-When the IP blacklist file is rewritten, the file watcher (`fsnotify`) triggers `ReloadConfig`, which builds a new trie and atomically swaps it in. In-flight requests continue to see the previous trie; subsequent requests see the new one.
+When the IP blacklist file is written in place or atomically replaced, the file watcher (`fsnotify`) triggers `ReloadConfig`, which builds a new trie and atomically swaps it in. In-flight requests continue to see the previous trie; subsequent requests see the new one.
 
 The Tor exit-node fetcher writes its own file (`tor_ip_blacklist_file`); to have those addresses become effective in the IP blacklist they must be appended to the file referenced by `ip_blacklist_file` (or that file must be the Tor file).
+
+## IP whitelist (`ip_whitelist_file`)
+
+- **Configuration directive**: `ip_whitelist_file <path>`
+- **Accepted entries**: bare IPv4/IPv6 addresses, CIDR ranges, and the token `private_ranges`, using the [common file syntax](#common-file-syntax).
+- **Combination**: file entries are unioned with every inline `whitelist_ip` entry.
+- **Validation**: unlike blacklist files, one invalid whitelist entry rejects the entire load. At startup this fails provisioning; during hot reload the active last known-good trie is retained.
+- **Semantics**: matches the direct peer address only and exempts it from IP blacklist, GeoIP country, and ASN checks. It does not exempt DNS blacklist, rate-limit, or regex-rule checks. See [IP whitelist](configuration.md#ip-whitelist) for the security rationale and reverse-proxy warning.
+
+### Sample file
+
+```text
+# Exempt a published service range
+203.0.113.0/24
+2001:db8:1234::/48
+
+# Also accepted, with the same edge-only warning as the inline directive
+private_ranges
+```
+
+### Hot reload
+
+Writes and atomic replacements call `ReloadIPWhitelist`. The replacement trie is built and validated before it is swapped into service. A malformed or unreadable update is logged and leaves the previous whitelist active.
 
 ## DNS blacklist (`dns_blacklist_file`)
 
@@ -76,7 +99,7 @@ xn--80ak6aa92e.com
 
 ### Hot reload
 
-Identical to the IP blacklist: a file write triggers `ReloadConfig`, which rebuilds the map and swaps it in atomically.
+Identical to the IP blacklist: an in-place write or atomic replacement triggers `ReloadConfig`, which rebuilds the map and swaps it in atomically.
 
 ## Counters
 
@@ -89,4 +112,4 @@ Both are reported by the `/waf_metrics` endpoint — see [metrics.md](metrics.md
 
 ## Rule of precedence
 
-In Phase 1 the order is fixed: the IP blacklist is checked first, then the DNS blacklist, then the rate limiter, then GeoIP / ASN. A blacklist match short-circuits the rest of the request — the regex rule engine is not invoked.
+In Phase 1 the order is fixed: the IP whitelist is checked first, then the IP blacklist, DNS blacklist, rate limiter, and GeoIP / ASN controls. A whitelist match skips only the IP blacklist and GeoIP / ASN controls; a blacklist match short-circuits the rest of the request, so the regex rule engine is not invoked.

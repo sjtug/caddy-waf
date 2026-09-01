@@ -28,7 +28,7 @@ If the configured `metrics_endpoint` matches the request path, the middleware se
 - Sliding-window rate limiter, optionally restricted to regex-matched paths.
 - Custom block responses per status code (Content-Type, headers, inline body or file).
 - Optional sensitive-data redaction in logs and query parameters.
-- Hot reload via `fsnotify` watchers on the rule and blacklist files.
+- Hot reload via `fsnotify` watchers on rule files, blacklist files, and the file-backed IP whitelist.
 - JSON metrics endpoint for Prometheus or ad-hoc tooling.
 - Asynchronous logging worker with a synchronous fallback when the buffer fills.
 

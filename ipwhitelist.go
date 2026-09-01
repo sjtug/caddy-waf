@@ -1,8 +1,10 @@
 package caddywaf
 
 import (
+	"bufio"
 	"fmt"
 	"net/netip"
+	"os"
 	"strings"
 
 	"github.com/phemmer/go-iptrie"
@@ -62,6 +64,78 @@ func buildIPWhitelist(entries []string) (*iptrie.Trie, []string, error) {
 	}
 
 	return trie, expanded, nil
+}
+
+// readIPWhitelistFile reads one bare IP, CIDR range, or private_ranges token
+// per line. Its syntax intentionally matches the IP blacklist files: blank
+// lines and lines beginning with # are ignored.
+func readIPWhitelistFile(path string) ([]string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open IP whitelist file %q: %w", path, err)
+	}
+	defer file.Close()
+
+	var entries []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		entry := strings.TrimSpace(scanner.Text())
+		if entry == "" || strings.HasPrefix(entry, "#") {
+			continue
+		}
+		entries = append(entries, entry)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("read IP whitelist file %q: %w", path, err)
+	}
+	return entries, nil
+}
+
+// loadIPWhitelist builds the complete whitelist from the inline entries and
+// the optional file, then atomically replaces the active trie. Building first
+// means a malformed or unreadable update leaves the last known-good whitelist
+// in service.
+func (m *Middleware) loadIPWhitelist() error {
+	entries := append([]string(nil), m.IPWhitelist...)
+	if m.IPWhitelistFile != "" {
+		fileEntries, err := readIPWhitelistFile(m.IPWhitelistFile)
+		if err != nil {
+			return err
+		}
+		entries = append(entries, fileEntries...)
+	}
+
+	trie, expanded, err := buildIPWhitelist(entries)
+	if err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	m.ipWhitelist = trie
+	m.mu.Unlock()
+
+	m.logger.Info("IP whitelist loaded",
+		zap.String("path", m.IPWhitelistFile),
+		zap.Int("entries", len(expanded)),
+	)
+
+	for _, entry := range entries {
+		if strings.EqualFold(strings.TrimSpace(entry), PrivateRangesToken) {
+			m.logger.Warn("IP whitelist includes private_ranges: requests whose PEER address is private are exempt from the IP blacklist, country filter and ASN filter. This is only what you want if caddy-waf is the edge. Behind another proxy the peer is that proxy, which would exempt all traffic.")
+			break
+		}
+	}
+	return nil
+}
+
+// ReloadIPWhitelist re-reads the configured whitelist file and atomically
+// installs it together with any inline whitelist_ip entries.
+func (m *Middleware) ReloadIPWhitelist() error {
+	m.logger.Info("Reloading IP whitelist", zap.String("file", m.IPWhitelistFile))
+	if err := m.loadIPWhitelist(); err != nil {
+		return fmt.Errorf("failed to reload IP whitelist: %w", err)
+	}
+	return nil
 }
 
 // isIPWhitelisted reports whether addr is exempt from the IP-reputation checks.

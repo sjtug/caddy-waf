@@ -1,11 +1,16 @@
 package caddywaf
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"regexp"
 	"testing"
+	"time"
 
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
@@ -58,6 +63,74 @@ func TestBuildIPWhitelist(t *testing.T) {
 		m := &Middleware{logger: zap.NewNop()}
 		assert.False(t, m.isIPWhitelisted("10.0.0.1:1"))
 	})
+}
+
+func TestIPWhitelistFileCombinesWithInlineEntries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ip-whitelist.txt")
+	require.NoError(t, os.WriteFile(path, []byte(`
+# Managed allowlist
+198.51.100.0/24
+2001:db8::1
+private_ranges
+`), 0o600))
+
+	m := &Middleware{
+		logger:          zap.NewNop(),
+		IPWhitelist:     []string{"203.0.113.4"},
+		IPWhitelistFile: path,
+	}
+	require.NoError(t, m.loadIPWhitelist())
+
+	assert.True(t, m.isIPWhitelisted("203.0.113.4:443"), "inline entry")
+	assert.True(t, m.isIPWhitelisted("198.51.100.77:443"), "file CIDR")
+	assert.True(t, m.isIPWhitelisted("[2001:db8::1]:443"), "file IPv6")
+	assert.True(t, m.isIPWhitelisted("10.1.2.3:443"), "file private_ranges token")
+	assert.False(t, m.isIPWhitelisted("198.51.101.1:443"))
+}
+
+func TestReloadIPWhitelistRetainsLastKnownGoodState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ip-whitelist.txt")
+	require.NoError(t, os.WriteFile(path, []byte("198.51.100.4\n"), 0o600))
+
+	m := &Middleware{logger: zap.NewNop(), IPWhitelistFile: path}
+	require.NoError(t, m.loadIPWhitelist())
+	assert.True(t, m.isIPWhitelisted("198.51.100.4:443"))
+
+	require.NoError(t, os.WriteFile(path, []byte("not-an-ip\n"), 0o600))
+	require.Error(t, m.ReloadIPWhitelist())
+	assert.True(t, m.isIPWhitelisted("198.51.100.4:443"),
+		"a malformed update must not replace the active trie")
+
+	require.NoError(t, os.WriteFile(path, []byte("203.0.113.9\n"), 0o600))
+	require.NoError(t, m.ReloadIPWhitelist())
+	assert.False(t, m.isIPWhitelisted("198.51.100.4:443"))
+	assert.True(t, m.isIPWhitelisted("203.0.113.9:443"))
+}
+
+func TestIPWhitelistWatcherHandlesAtomicReplacement(t *testing.T) {
+	dir := t.TempDir()
+	// The callback is selected by configuration category, not by guessing from
+	// the filename; "rule" here must not route this event to ReloadRules.
+	path := filepath.Join(dir, "rule-ip-whitelist.txt")
+	require.NoError(t, os.WriteFile(path, []byte("198.51.100.4\n"), 0o600))
+
+	m := &Middleware{logger: zap.NewNop(), IPWhitelistFile: path}
+	require.NoError(t, m.loadIPWhitelist())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.startFileWatcher(ctx, []string{path}, "IP whitelist", m.ReloadIPWhitelist)
+	defer func() {
+		cancel()
+		m.watcherWG.Wait()
+	}()
+
+	replacement := filepath.Join(dir, "ip-whitelist.new")
+	require.NoError(t, os.WriteFile(replacement, []byte("203.0.113.9\n"), 0o600))
+	require.NoError(t, os.Rename(replacement, path))
+
+	require.Eventually(t, func() bool {
+		return !m.isIPWhitelisted("198.51.100.4:443") && m.isIPWhitelisted("203.0.113.9:443")
+	}, 5*time.Second, 10*time.Millisecond)
 }
 
 // TestWhitelistIgnoresForwardedHeaders is the security property of this feature.
@@ -149,6 +222,18 @@ func TestWhitelistEndToEnd(t *testing.T) {
 		assert.True(t, reached, "the whitelisted peer must reach the upstream")
 	})
 
+	t.Run("a file-backed whitelist takes precedence over the IP blacklist", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "ip-whitelist.txt")
+		require.NoError(t, os.WriteFile(path, []byte("10.0.0.5\n"), 0o600))
+		m := newMW(t, nil)
+		m.IPWhitelistFile = path
+		require.NoError(t, m.loadIPWhitelist())
+
+		code, reached := probe(t, m, "10.0.0.5:1234", testURL+"/", nil)
+		assert.Equal(t, http.StatusOK, code)
+		assert.True(t, reached, "the file-whitelisted peer must reach the upstream")
+	})
+
 	t.Run("a whitelisted peer is still subject to the rule engine", func(t *testing.T) {
 		m := newMW(t, []string{PrivateRangesToken})
 		code, reached := probe(t, m, "10.0.0.5:1234", testURL+"/?q=attackpayload", nil)
@@ -164,6 +249,38 @@ func TestWhitelistEndToEnd(t *testing.T) {
 		assert.Equal(t, http.StatusForbidden, code,
 			"203.0.113.9 is blacklisted and must stay blocked despite the header")
 		assert.False(t, reached)
+	})
+}
+
+func TestIPWhitelistFileJSON(t *testing.T) {
+	var m Middleware
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"ip_whitelist_file": "/etc/caddy/ip-whitelist.txt",
+		"ip_whitelist": ["203.0.113.4"]
+	}`), &m))
+	assert.Equal(t, "/etc/caddy/ip-whitelist.txt", m.IPWhitelistFile)
+	assert.Equal(t, []string{"203.0.113.4"}, m.IPWhitelist)
+}
+
+func TestParseIPWhitelistFileDirective(t *testing.T) {
+	t.Run("configures and creates the file", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "ip-whitelist.txt")
+		cfg := fmt.Sprintf("waf {\n rule_file rules.json\n ip_whitelist_file %s\n}", path)
+		m := &Middleware{}
+		err := NewConfigLoader(zap.NewNop()).UnmarshalCaddyfile(caddyfile.NewTestDispenser(cfg), m)
+		require.NoError(t, err)
+		assert.Equal(t, path, m.IPWhitelistFile)
+		_, err = os.Stat(path)
+		require.NoError(t, err)
+	})
+
+	t.Run("requires exactly one path", func(t *testing.T) {
+		for _, directive := range []string{"ip_whitelist_file", "ip_whitelist_file one two"} {
+			m := &Middleware{}
+			err := NewConfigLoader(zap.NewNop()).UnmarshalCaddyfile(
+				caddyfile.NewTestDispenser("waf {\n rule_file rules.json\n "+directive+"\n}"), m)
+			require.Error(t, err)
+		}
 	})
 }
 

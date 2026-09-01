@@ -59,6 +59,8 @@ The full table is in [`docs/configuration.md`](docs/configuration.md). A summary
 | `log_buffer` | `log_buffer <positive int>` |
 | `rule_file` | `rule_file <file>` (repeatable) |
 | `ip_blacklist_file` | `ip_blacklist_file <file>` |
+| `ip_whitelist_file` | `ip_whitelist_file <file>` |
+| `whitelist_ip` | `whitelist_ip <IP-or-CIDR> [<IP-or-CIDR> …]` (repeatable) |
 | `dns_blacklist_file` | `dns_blacklist_file <file>` |
 | `anomaly_threshold` | `anomaly_threshold <positive int>` |
 | `block_countries` | `block_countries <mmdb> <ISO> [<ISO> …]` |
@@ -87,6 +89,7 @@ example.com {
     waf {
         rule_file          rules.json
         ip_blacklist_file  ip_blacklist.txt
+        ip_whitelist_file  ip_whitelist.txt
         dns_blacklist_file dns_blacklist.txt
         metrics_endpoint   /waf_metrics
     }
